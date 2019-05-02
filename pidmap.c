@@ -1,8 +1,7 @@
+#include <config.h>
 
 #include <glib.h>
 #include <gio/gio.h>
-
-#define _GNU_SOURCE 1
 
 #include <dirent.h>
 #include <errno.h>
