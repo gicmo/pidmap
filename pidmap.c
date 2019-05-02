@@ -12,15 +12,40 @@
 #include <unistd.h>
 
 static int
+parse_pid (char *val, pid_t *pid)
+{
+  const char *t;
+  char *end;
+  guint64 p;
+
+  g_debug ("val: [%s]", val);
+
+  t = strrchr (val, '\t');
+  if (t == NULL)
+    return -ENOENT;
+
+  errno = 0;
+  p = g_ascii_strtoull (t, &end, 0);
+  if (end == t || errno != 0)
+    return -ENOENT;
+
+  if (pid)
+    *pid = (pid_t) p;
+
+  return 0;
+}
+
+static int
 map_pid (int fd, pid_t *out)
 {
+  g_autofree char *key = NULL;
+  g_autofree char *val = NULL;
   FILE *f;
-  char *key = NULL;
   size_t keylen = 0;
-  char *val = NULL;
   size_t vallen = 0;
   ssize_t n;
   pid_t p = 0;
+  int r = 0;
 
   f = fdopen (fd, "r");
 
@@ -28,8 +53,6 @@ map_pid (int fd, pid_t *out)
     return -errno;
 
   do {
-    char *t, *end;
-
     n = getdelim (&key, &keylen, ':', f);
 
     if (n == -1)
@@ -40,31 +63,19 @@ map_pid (int fd, pid_t *out)
     if (n == -1)
       break;
 
-    if (strncmp (key, "NSpid", strlen ("NSpid")))
-      continue;
+    if (!strncmp (key, "NSpid", strlen ("NSpid")))
+      r = parse_pid (val, out);
 
-    g_debug ("val: [%s]", val);
-
-    t = strrchr (val, '\t');
-    if (t == NULL)
-      continue;
-
-    errno = 0;
-    p = strtoul (t, &end, 0);
-    if (end == t || errno != 0)
-      continue;
-
-  } while (p == 0);
+  } while (r == 0 && p == 0);
 
   fclose (f);
 
-  if (p > 0)
-    {
-      *out = p;
-      return 0;
-    }
+  if (r != 0)
+    return r;
+  else if (p == 0)
+    return -ENOENT;
 
-  return -ENOENT;
+  return 0;
 }
 
 int
