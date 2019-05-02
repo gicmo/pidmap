@@ -36,7 +36,29 @@ parse_pid (char *val, pid_t *pid)
 }
 
 static int
-map_pid (int fd, pid_t *out)
+parse_uid (char *val, uid_t *uid)
+{
+  const char *t;
+  char *end;
+  guint64 p;
+
+  t = strrchr (val, '\t');
+  if (t == NULL)
+    return -ENOENT;
+
+  errno = 0;
+  p = g_ascii_strtoull (t, &end, 0);
+  if (end == t || errno != 0)
+    return -ENOENT;
+
+  if (uid)
+    *uid = (uid_t) p;
+
+  return 0;
+}
+
+static int
+map_pid (int fd, pid_t *pid_out, uid_t *uid_out)
 {
   g_autofree char *key = NULL;
   g_autofree char *val = NULL;
@@ -45,6 +67,7 @@ map_pid (int fd, pid_t *out)
   size_t vallen = 0;
   ssize_t n;
   pid_t p = 0;
+  uid_t u = 0;
   int r = 0;
 
   f = fdopen (fd, "r");
@@ -63,16 +86,20 @@ map_pid (int fd, pid_t *out)
     if (n == -1)
       break;
 
-    if (!strncmp (key, "NSpid", strlen ("NSpid")))
-      r = parse_pid (val, out);
+    g_strstrip (val);
 
-  } while (r == 0 && p == 0);
+    if (!strncmp (key, "NSpid", strlen ("NSpid")))
+      r = parse_pid (val, pid_out);
+    else if (!strncmp (key, "Uid", strlen ("Uid")))
+      r = parse_uid (val, uid_out);
+
+  } while (r == 0 && p == 0 && u == 0);
 
   fclose (f);
 
   if (r != 0)
     return r;
-  else if (p == 0)
+  else if (p == 0 || u == 0)
     return -ENOENT;
 
   return 0;
@@ -109,6 +136,7 @@ main (int argc, char **argv)
       char buffer[PATH_MAX] = {0, };
       struct stat st;
       pid_t mapped = 0;
+      uid_t uid = 0;
       int r;
 
       snprintf (buffer, sizeof(buffer), "%s/ns/pid", de->d_name);
@@ -127,8 +155,9 @@ main (int argc, char **argv)
       if (r == -1)
 	continue;
 
-      r = map_pid (r, &mapped);
-      g_print ("\t %lu\n", (long unsigned) mapped);
+      r = map_pid (r, &mapped, &uid);
+      g_print ("\t %lu [uid: %lu]\n",
+	       (unsigned long) mapped, (unsigned long) uid);
     }
 
   closedir (proc);
