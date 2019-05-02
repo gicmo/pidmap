@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 static int
-parse_pid (char *val, pid_t *pid)
+parse_status_field_pid (char *val, pid_t *pid)
 {
   const char *t;
   char *end;
@@ -34,7 +34,7 @@ parse_pid (char *val, pid_t *pid)
 }
 
 static int
-parse_uid (char *val, uid_t *uid)
+parse_status_field_uid (char *val, uid_t *uid)
 {
   const char *t;
   char *end;
@@ -97,12 +97,12 @@ map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
 
     if (!strncmp (key, "NSpid", strlen ("NSpid")))
       {
-	r = parse_pid (val, pid_out);
+	r = parse_status_field_pid (val, pid_out);
 	have_pid = r > -1;
       }
     else if (!strncmp (key, "Uid", strlen ("Uid")))
       {
-	r = parse_uid (val, uid_out);
+	r = parse_status_field_uid (val, uid_out);
 	have_uid = r > -1;
       }
 
