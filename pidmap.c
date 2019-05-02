@@ -1,5 +1,6 @@
 
 #include <glib.h>
+#include <gio/gio.h>
 
 #define _GNU_SOURCE 1
 
@@ -17,8 +18,6 @@ parse_pid (char *val, pid_t *pid)
   const char *t;
   char *end;
   guint64 p;
-
-  g_debug ("val: [%s]", val);
 
   t = strrchr (val, '\t');
   if (t == NULL)
@@ -57,23 +56,32 @@ parse_uid (char *val, uid_t *uid)
   return 0;
 }
 
-static int
-map_pid (int fd, pid_t *pid_out, uid_t *uid_out)
+static gboolean
+map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
 {
   g_autofree char *key = NULL;
   g_autofree char *val = NULL;
+  gboolean have_pid = FALSE;
+  gboolean have_uid = FALSE;
   FILE *f;
   size_t keylen = 0;
   size_t vallen = 0;
   ssize_t n;
-  pid_t p = 0;
-  uid_t u = 0;
   int r = 0;
+
+  g_return_val_if_fail (fd > -1, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   f = fdopen (fd, "r");
 
   if (f == NULL)
-    return -errno;
+    {
+      int code = g_io_error_from_errno (errno);
+      g_set_error (error, G_IO_ERROR, code,
+		   "Could not open files: %s",
+		   g_strerror (errno));
+      return FALSE;
+    }
 
   do {
     n = getdelim (&key, &keylen, ':', f);
@@ -89,29 +97,46 @@ map_pid (int fd, pid_t *pid_out, uid_t *uid_out)
     g_strstrip (val);
 
     if (!strncmp (key, "NSpid", strlen ("NSpid")))
-      r = parse_pid (val, pid_out);
+      {
+	r = parse_pid (val, pid_out);
+	have_pid = r > -1;
+      }
     else if (!strncmp (key, "Uid", strlen ("Uid")))
-      r = parse_uid (val, uid_out);
+      {
+	r = parse_uid (val, uid_out);
+	have_uid = r > -1;
+      }
 
-  } while (r == 0 && p == 0 && u == 0);
+  } while (r == 0 && (!have_uid || !have_pid));
 
   fclose (f);
 
   if (r != 0)
-    return r;
-  else if (p == 0 || u == 0)
-    return -ENOENT;
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		   "Could not parse 'status' file");
+      return FALSE;
+    }
+  else if (!have_uid || !have_pid)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		   "Could not parse 'status' file: missing fields");
 
-  return 0;
+      return FALSE;
+    }
+
+  return TRUE;
 }
 
 int
 main (int argc, char **argv)
 {
+  g_autoptr(GError) err = NULL;
   DIR *proc = NULL;
   struct dirent *de = NULL;
   ino_t pidns;
   char *end = NULL;
+  gboolean ok;
 
   if (argc < 2)
     {
@@ -155,7 +180,14 @@ main (int argc, char **argv)
       if (r == -1)
 	continue;
 
-      r = map_pid (r, &mapped, &uid);
+      ok = map_pid (r, &mapped, &uid, &err);
+      if (!ok)
+	{
+	  g_printerr ("Failed to map '%s': %s\n", de->d_name, err->message);
+	  g_clear_error (&err);
+	  continue;
+	}
+
       g_print ("\t %lu [uid: %lu]\n",
 	       (unsigned long) mapped, (unsigned long) uid);
     }
