@@ -198,25 +198,35 @@ main (int argc, char **argv)
 
   while ((de = readdir (proc)) != NULL)
     {
-      char buffer[PATH_MAX] = {0, };
       struct stat st;
       pid_t mapped = 0;
       uid_t uid = 0;
+      int pid_fd;
       int r;
 
-      snprintf (buffer, sizeof(buffer), "%s/ns/pid", de->d_name);
+      if (de->d_type != DT_DIR)
+      	continue;
 
-      r = fstatat (dirfd (proc), buffer, &st, 0);
+      pid_fd = openat (dirfd (proc), de->d_name, DIR_OPEN_FLAGS);
+      if (pid_fd == -1)
+	{
+	  g_warning ("Could not open %s: %s", de->d_name, g_strerror (errno));
+	  continue;
+	}
+
+      r = fstatat (pid_fd, "ns/pid", &st, 0);
       if (r == -1)
-	continue;
+	{
+	  g_debug ("no pidns for %s", de->d_name);
+	  continue;
+	}
 
       if (pidns != st.st_ino)
 	continue;
 
       g_print ("%s in %ld\n", de->d_name, pidns);
 
-      snprintf (buffer, sizeof(buffer), "%s/status", de->d_name);
-      r = openat (dirfd (proc), buffer,  O_RDONLY | O_CLOEXEC);
+      r = openat (pid_fd, "status",  O_RDONLY | O_CLOEXEC);
       if (r == -1)
 	continue;
 
