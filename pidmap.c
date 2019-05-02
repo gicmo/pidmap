@@ -128,14 +128,55 @@ map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
 }
 
 int
+usage_error (GError *error)
+{
+  g_printerr ("%s: error", g_get_application_name ());
+  if (error)
+    g_printerr (": %s", error->message);
+  g_printerr ("\n");
+  g_printerr ("Try \"%s --help\" for more information.", g_get_prgname ());
+  g_printerr ("\n");
+
+  return EXIT_FAILURE;
+}
+
+int
+usage_error_need_arg (const char *arg)
+{
+  g_autoptr(GError) error = NULL;
+
+  g_set_error (&error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+               "missing argument '%s'", arg);
+  return usage_error (error);
+}
+
+int
 main (int argc, char **argv)
 {
+  g_autoptr(GOptionContext) optctx = NULL;
   g_autoptr(GError) err = NULL;
   DIR *proc = NULL;
   struct dirent *de = NULL;
   ino_t pidns;
   char *end = NULL;
   gboolean ok;
+  gboolean do_version = FALSE;
+  GOptionEntry options[] = {
+    { "version", 0, 0, G_OPTION_ARG_NONE, &do_version, "Print version information and exit", NULL },
+    { NULL }
+  };
+
+  optctx = g_option_context_new ("[COMMAND]");
+  g_option_context_add_main_entries (optctx, options, NULL);
+
+  if (!g_option_context_parse (optctx, &argc, &argv, &err))
+    return usage_error (err);
+
+  if (do_version)
+    {
+      g_print ("%s version: %s\n", PACKAGE_NAME, PACKAGE_VERSION);
+      return EXIT_SUCCESS;
+    }
 
   if (argc < 2)
     {
