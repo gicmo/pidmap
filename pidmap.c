@@ -187,7 +187,7 @@ close_fd_ptr (int *fd)
 }
 
 static GHashTable *
-map_pids (DIR *proc, ino_t pidns, GArray *pids)
+map_pids (DIR *proc, ino_t pidns, pid_t *pids, guint n_pids)
 {
   GHashTable *res;
   struct dirent *de;
@@ -195,13 +195,8 @@ map_pids (DIR *proc, ino_t pidns, GArray *pids)
   res = g_hash_table_new_full (g_int_hash, g_int_equal, NULL, (GDestroyNotify) pid_entry_destroy);
 
   if (pids != NULL)
-    {
-      for (guint i = 0; i < pids->len; i++)
-	{
-	  pid_t *pid = &g_array_index(pids, pid_t, i);
-	  g_hash_table_insert (res, pid, NULL);
-	}
-    }
+    for (guint i = 0; i < n_pids; i++)
+      g_hash_table_insert (res, pids + i, NULL);
 
   while ((de = readdir (proc)) != NULL)
     {
@@ -331,7 +326,7 @@ main (int argc, char **argv)
 
   proc = opendir ("/proc");
 
-  mapped = map_pids (proc, pidns, NULL);
+  mapped = map_pids (proc, pidns, NULL, 0);
 
   g_hash_table_iter_init (&iter, mapped);
   while (g_hash_table_iter_next (&iter, &key, &value))
