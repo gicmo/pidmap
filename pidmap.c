@@ -242,8 +242,6 @@ map_pids (DIR *proc, ino_t pidns, GArray *pids)
       pe = pid_entry_new (inside);
       g_hash_table_replace (res, &pe->inside, pe);
 
-      g_debug ("%s in %ld\n", de->d_name, pidns);
-
       ok = parse_status_file (pid_fd, &pe->outside, &pe->uid, &pe->error);
       if (!ok)
 	continue;
