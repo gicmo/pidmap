@@ -63,7 +63,7 @@ parse_status_field_uid (char *val, uid_t *uid)
 }
 
 static gboolean
-map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
+map_pid (int pid_fd, pid_t *pid_out, uid_t *uid_out, GError **error)
 {
   g_autofree char *key = NULL;
   g_autofree char *val = NULL;
@@ -73,10 +73,20 @@ map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
   size_t keylen = 0;
   size_t vallen = 0;
   ssize_t n;
+  int fd;
   int r = 0;
 
-  g_return_val_if_fail (fd > -1, FALSE);
+  g_return_val_if_fail (pid_fd > -1, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  fd = openat (pid_fd, "status",  O_RDONLY | O_CLOEXEC);
+  if (fd == -1)
+    {
+      g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
+		   "could not open 'status' file: %s",
+		   g_strerror (errno));
+      return FALSE;
+    }
 
   f = fdopen (fd, "r");
 
@@ -86,8 +96,11 @@ map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
       g_set_error (error, G_IO_ERROR, code,
 		   "Could not open files: %s",
 		   g_strerror (errno));
+      (void) close (fd);
       return FALSE;
     }
+
+  fd = -1; /* fd is now owned by f */
 
   do {
     n = getdelim (&key, &keylen, ':', f);
@@ -231,16 +244,7 @@ map_pids (DIR *proc, ino_t pidns, GArray *pids)
 
       g_debug ("%s in %ld\n", de->d_name, pidns);
 
-      r = openat (pid_fd, "status",  O_RDONLY | O_CLOEXEC);
-      if (r == -1)
-	{
-	  g_set_error (&pe->error, G_IO_ERROR, g_io_error_from_errno (errno),
-		       "could not open 'status' file: %s",
-		       g_strerror (errno));
-	  continue;
-	}
-
-      ok = map_pid (r, &pe->outside, &pe->uid, &pe->error);
+      ok = map_pid (pid_fd, &pe->outside, &pe->uid, &pe->error);
       if (!ok)
 	continue;
 
