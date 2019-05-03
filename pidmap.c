@@ -63,6 +63,28 @@ parse_status_field_uid (char *val, uid_t *uid)
 }
 
 static gboolean
+lookup_ns_from_pid_fd (int pid_fd, ino_t *ns, GError **error)
+{
+  struct stat st;
+  int r;
+
+  g_return_val_if_fail (ns != NULL, FALSE);
+
+  r = fstatat (pid_fd, "ns/pid", &st, 0);
+  if (r == -1)
+    {
+      g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
+		   "failed to stat '%u/ns/pid': %s", (guint) pid_fd,
+		   g_strerror (errno));
+      return FALSE;
+    }
+
+  *ns = st.st_ino;
+
+  return TRUE;
+}
+
+static gboolean
 parse_status_file (int pid_fd, pid_t *pid_out, uid_t *uid_out, GError **error)
 {
   g_autofree char *key = NULL;
@@ -205,6 +227,7 @@ map_pids (DIR *proc, ino_t pidns, pid_t *pids, guint n_pids)
       struct stat st;
       gboolean ok;
       pid_t inside;
+      ino_t ns;
       int r;
 
       if (de->d_type != DT_DIR)
@@ -217,14 +240,11 @@ map_pids (DIR *proc, ino_t pidns, pid_t *pids, guint n_pids)
 	  continue;
 	}
 
-      r = fstatat (pid_fd, "ns/pid", &st, 0);
-      if (r == -1)
-	{
-	  g_debug ("no pidns for %s", de->d_name);
-	  continue;
-	}
+      ok = lookup_ns_from_pid_fd (pid_fd, &ns, NULL);
+      if (!ok)
+	continue;
 
-      if (pidns != st.st_ino)
+      if (pidns != ns)
 	continue;
 
       r = parse_pid (de->d_name, &inside);
