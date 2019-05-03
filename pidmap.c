@@ -63,7 +63,7 @@ parse_status_field_uid (char *val, uid_t *uid)
 }
 
 static gboolean
-map_pid (int pid_fd, pid_t *pid_out, uid_t *uid_out, GError **error)
+parse_status_file (int pid_fd, pid_t *pid_out, uid_t *uid_out, GError **error)
 {
   g_autofree char *key = NULL;
   g_autofree char *val = NULL;
@@ -244,7 +244,7 @@ map_pids (DIR *proc, ino_t pidns, GArray *pids)
 
       g_debug ("%s in %ld\n", de->d_name, pidns);
 
-      ok = map_pid (pid_fd, &pe->outside, &pe->uid, &pe->error);
+      ok = parse_status_file (pid_fd, &pe->outside, &pe->uid, &pe->error);
       if (!ok)
 	continue;
 
