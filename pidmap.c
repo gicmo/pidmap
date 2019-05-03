@@ -12,25 +12,32 @@
 #include <unistd.h>
 
 static int
-parse_status_field_pid (char *val, pid_t *pid)
+parse_pid (const char *str, pid_t *pid)
 {
-  const char *t;
   char *end;
   guint64 p;
 
-  t = strrchr (val, '\t');
-  if (t == NULL)
-    return -ENOENT;
-
-  errno = 0;
-  p = g_ascii_strtoull (t, &end, 0);
-  if (end == t || errno != 0)
+ errno = 0;
+  p = g_ascii_strtoull (str, &end, 0);
+  if (end == str || errno != 0)
     return -ENOENT;
 
   if (pid)
     *pid = (pid_t) p;
 
   return 0;
+}
+
+static int
+parse_status_field_pid (char *val, pid_t *pid)
+{
+  const char *t;
+
+  t = strrchr (val, '\t');
+  if (t == NULL)
+    return -ENOENT;
+
+  return parse_pid (t, pid);
 }
 
 static int
