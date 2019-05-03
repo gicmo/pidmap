@@ -134,6 +134,131 @@ map_pid (int fd, pid_t *pid_out, uid_t *uid_out, GError **error)
   return TRUE;
 }
 
+typedef struct PidEntry_ {
+  pid_t inside;
+  pid_t outside;
+  struct timespec timestamp;
+  uid_t uid;
+
+  /* */
+  GError *error;
+} PidEntry;
+
+static PidEntry *
+pid_entry_new (pid_t inside)
+{
+  PidEntry *entry = g_slice_new0 (PidEntry);
+  entry->inside = inside;
+  return entry;
+}
+
+static void
+pid_entry_destroy (PidEntry *entry)
+{
+  if (entry == NULL)
+    return;
+
+  g_clear_error (&entry->error);
+  g_slice_free (PidEntry, entry);
+}
+
+#define DIR_OPEN_FLAGS (O_RDONLY | O_NONBLOCK | O_DIRECTORY | O_CLOEXEC | O_NOCTTY)
+
+static void
+close_fd_ptr (int *fd)
+{
+  if (fd == NULL || *fd < 0)
+    return;
+
+  (void) close (*fd);
+}
+
+static GHashTable *
+map_pids (DIR *proc, ino_t pidns, GArray *pids)
+{
+  GHashTable *res;
+  struct dirent *de;
+
+  res = g_hash_table_new_full (g_int_hash, g_int_equal, NULL, (GDestroyNotify) pid_entry_destroy);
+
+  if (pids != NULL)
+    {
+      for (guint i = 0; i < pids->len; i++)
+	{
+	  pid_t *pid = &g_array_index(pids, pid_t, i);
+	  g_hash_table_insert (res, pid, NULL);
+	}
+    }
+
+  while ((de = readdir (proc)) != NULL)
+    {
+      __attribute__((cleanup(close_fd_ptr))) int pid_fd = -1;
+      PidEntry *pe;
+      struct stat st;
+      gboolean ok;
+      pid_t inside;
+      int r;
+
+      if (de->d_type != DT_DIR)
+      	continue;
+
+      pid_fd = openat (dirfd (proc), de->d_name, DIR_OPEN_FLAGS);
+      if (pid_fd == -1)
+	{
+	  g_warning ("Could not open %s: %s", de->d_name, g_strerror (errno));
+	  continue;
+	}
+
+      r = fstatat (pid_fd, "ns/pid", &st, 0);
+      if (r == -1)
+	{
+	  g_debug ("no pidns for %s", de->d_name);
+	  continue;
+	}
+
+      if (pidns != st.st_ino)
+	continue;
+
+      r = parse_pid (de->d_name, &inside);
+      if (r < 0)
+	continue;
+
+      if (pids && !g_hash_table_contains (res, &inside))
+	continue;
+
+      pe = pid_entry_new (inside);
+      g_hash_table_replace (res, &pe->inside, pe);
+
+      g_debug ("%s in %ld\n", de->d_name, pidns);
+
+      r = openat (pid_fd, "status",  O_RDONLY | O_CLOEXEC);
+      if (r == -1)
+	{
+	  g_set_error (&pe->error, G_IO_ERROR, g_io_error_from_errno (errno),
+		       "could not open 'status' file: %s",
+		       g_strerror (errno));
+	  continue;
+	}
+
+      ok = map_pid (r, &pe->outside, &pe->uid, &pe->error);
+      if (!ok)
+	continue;
+
+      r = fstat (pid_fd, &st);
+      if (r == -1)
+	{
+	  g_set_error (&pe->error, G_IO_ERROR, g_io_error_from_errno (errno),
+		       "could not stat '%s: %s", de->d_name, g_strerror (errno));
+	}
+      else
+	{
+	  pe->timestamp = st.st_mtim;
+	}
+    }
+
+  return res;
+}
+
 int
 usage_error (GError *error)
 {
@@ -162,11 +287,12 @@ main (int argc, char **argv)
 {
   g_autoptr(GOptionContext) optctx = NULL;
   g_autoptr(GError) err = NULL;
+  g_autoptr(GHashTable) mapped = NULL;
   DIR *proc = NULL;
-  struct dirent *de = NULL;
   ino_t pidns;
   char *end = NULL;
-  gboolean ok;
+  GHashTableIter iter;
+  gpointer key, value;
   gboolean do_version = FALSE;
   GOptionEntry options[] = {
     { "version", 0, 0, G_OPTION_ARG_NONE, &do_version, "Print version information and exit", NULL },
@@ -203,50 +329,20 @@ main (int argc, char **argv)
 
   proc = opendir ("/proc");
 
-  while ((de = readdir (proc)) != NULL)
+  mapped = map_pids (proc, pidns, NULL);
+
+  g_hash_table_iter_init (&iter, mapped);
+  while (g_hash_table_iter_next (&iter, &key, &value))
     {
-      struct stat st;
-      pid_t mapped = 0;
-      uid_t uid = 0;
-      int pid_fd;
-      int r;
+      PidEntry *e = (PidEntry *) key;
 
-      if (de->d_type != DT_DIR)
-      	continue;
-
-      pid_fd = openat (dirfd (proc), de->d_name, DIR_OPEN_FLAGS);
-      if (pid_fd == -1)
+      if (e->error)
 	{
-	  g_warning ("Could not open %s: %s", de->d_name, g_strerror (errno));
+	  g_printerr ("failed to map: %d; %s\n", e->inside, e->error->message);
 	  continue;
 	}
 
-      r = fstatat (pid_fd, "ns/pid", &st, 0);
-      if (r == -1)
-	{
-	  g_debug ("no pidns for %s", de->d_name);
-	  continue;
-	}
-
-      if (pidns != st.st_ino)
-	continue;
-
-      g_print ("%s in %ld\n", de->d_name, pidns);
-
-      r = openat (pid_fd, "status",  O_RDONLY | O_CLOEXEC);
-      if (r == -1)
-	continue;
-
-      ok = map_pid (r, &mapped, &uid, &err);
-      if (!ok)
-	{
-	  g_printerr ("Failed to map '%s': %s\n", de->d_name, err->message);
-	  g_clear_error (&err);
-	  continue;
-	}
-
-      g_print ("\t %lu [uid: %lu]\n",
-	       (unsigned long) mapped, (unsigned long) uid);
+      g_print (" %d -> %d [%d]\n", e->inside, e->outside, e->uid);
     }
 
   closedir (proc);
