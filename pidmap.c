@@ -3,6 +3,8 @@
 #include <glib.h>
 #include <gio/gio.h>
 
+#include <json-glib/json-glib.h>
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -10,6 +12,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/*  */
 
 static int
 parse_pid (const char *str, pid_t *pid)
@@ -276,6 +280,64 @@ map_pids (DIR *proc, ino_t pidns, pid_t *pids, guint n_pids)
   return res;
 }
 
+/*  */
+pid_t
+flatpak_get_child_pid (const char *instance, GError **error)
+{
+  g_autoptr(JsonParser) parser = NULL;
+  g_autofree char *data = NULL;
+  JsonNode *root;
+  JsonObject *cpo;
+  gsize len;
+  char *path;
+  pid_t pid;
+
+  g_return_val_if_fail (instance != NULL, 0);
+
+  path = g_build_filename (g_get_user_runtime_dir (),
+			   ".flatpak",
+			   instance,
+			   "bwrapinfo.json",
+			   NULL);
+
+  if (!g_file_get_contents (path, &data, &len, error))
+    {
+      g_prefix_error (error, "could not load '%s': ", path);
+      return 0;
+    }
+
+  parser = json_parser_new ();
+  if (!json_parser_load_from_data (parser, data, len, error))
+    {
+      g_prefix_error (error, "could not parse '%s': ", path);
+      return 0;
+    }
+
+  root = json_parser_get_root (parser);
+  if (!root)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		   "unexepcted empty file at '%s'", path);
+      return 0;
+    }
+
+  cpo = json_node_get_object (root);
+  if (cpo == NULL)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		   "unexepcted empty file at '%s'", path);
+      return 0;
+    }
+
+  pid = json_object_get_int_member (cpo, "child-pid");
+  if (pid == 0)
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		   "failed to get child pid member of '%s'", path);
+
+  return pid;
+}
+
+/*  */
 int
 usage_error (GError *error)
 {
@@ -299,20 +361,24 @@ usage_error_need_arg (const char *arg)
   return usage_error (error);
 }
 
+
 int
 main (int argc, char **argv)
 {
   g_autoptr(GOptionContext) optctx = NULL;
   g_autoptr(GError) err = NULL;
   g_autoptr(GHashTable) mapped = NULL;
+  g_autofree char *fp_instance = NULL;
   DIR *proc = NULL;
   ino_t pidns;
   char *end = NULL;
   GHashTableIter iter;
   gpointer key, value;
+  gboolean ok;
   gboolean do_version = FALSE;
   GOptionEntry options[] = {
     { "version", 0, 0, G_OPTION_ARG_NONE, &do_version, "Print version information and exit", NULL },
+    { "flatpak", 0, 0, G_OPTION_ARG_STRING, &fp_instance, "Map pids for the running flatpak", NULL },
     { NULL }
   };
 
@@ -328,23 +394,54 @@ main (int argc, char **argv)
       return EXIT_SUCCESS;
     }
 
-  if (argc < 2)
-    {
-      g_printerr ("usage: %s <PIDNS>\n", argv[0]);
-      return -1;
-    }
-
-  errno = 0;
-  pidns = (ino_t) strtoull (argv[1], &end, 10);
-
-  if (argv[1] == end || errno != 0)
-    {
-      g_printerr ("PIDNS format error\n");
-      g_printerr ("usage: %s <PIDNS>\n", argv[0]);
-      return -1;
-    }
-
   proc = opendir ("/proc");
+
+  if (fp_instance)
+    {
+      char buf[1024] = {0, };
+      pid_t pid;
+      int pid_fd;
+
+      pid = flatpak_get_child_pid (fp_instance, &err);
+      if (pid == 0)
+	{
+	  g_printerr ("Could not find flatpak instance: %s\n",
+		      err->message);
+	  return -1;
+	}
+
+      snprintf (buf, sizeof (buf), "%u", pid);
+      pid_fd = openat (dirfd (proc), buf, DIR_OPEN_FLAGS);
+
+      ok = lookup_ns_from_pid_fd (pid_fd, &pidns, &err);
+
+      (void) close (pid_fd);
+      if (!ok)
+	{
+	  g_printerr ("Could not resolve pid namespace: %s\n",
+		      err->message);
+	  return -1;
+	}
+    }
+  else
+    {
+
+      if (argc < 2)
+	{
+	  g_printerr ("usage: %s <PIDNS>\n", argv[0]);
+	  return -1;
+	}
+
+      errno = 0;
+      pidns = (ino_t) strtoull (argv[1], &end, 10);
+
+      if (argv[1] == end || errno != 0)
+	{
+	  g_printerr ("PIDNS format error\n");
+	  g_printerr ("usage: %s <PIDNS>\n", argv[0]);
+	  return -1;
+	}
+    }
 
   mapped = map_pids (proc, pidns, NULL, 0);
 
