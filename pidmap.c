@@ -16,24 +16,34 @@
 /*  */
 
 static int
-parse_pid (const char *str, pid_t *pid)
+parse_pid (const char *str,
+	   pid_t      *pid)
 {
   char *end;
-  guint64 p;
+  guint64 v;
+  pid_t p;
 
- errno = 0;
-  p = g_ascii_strtoull (str, &end, 0);
-  if (end == str || errno != 0)
+  errno = 0;
+  v = g_ascii_strtoull (str, &end, 0);
+  if (end == str)
     return -ENOENT;
+  else if (errno != 0)
+    return -errno;
+
+  p = (pid_t) v;
+
+  if (p < 1 || (guint64) p != v)
+    return -ERANGE;
 
   if (pid)
-    *pid = (pid_t) p;
+    *pid = p;
 
   return 0;
 }
 
 static int
-parse_status_field_pid (char *val, pid_t *pid)
+parse_status_field_pid (const char *val,
+			pid_t      *pid)
 {
   const char *t;
 
@@ -45,23 +55,32 @@ parse_status_field_pid (char *val, pid_t *pid)
 }
 
 static int
-parse_status_field_uid (char *val, uid_t *uid)
+parse_status_field_uid (const char *val,
+			uid_t      *uid)
 {
   const char *t;
   char *end;
-  guint64 p;
+  guint64 v;
+  uid_t u;
 
   t = strrchr (val, '\t');
   if (t == NULL)
     return -ENOENT;
 
   errno = 0;
-  p = g_ascii_strtoull (t, &end, 0);
-  if (end == t || errno != 0)
+  v = g_ascii_strtoull (t, &end, 0);
+  if (end == val)
     return -ENOENT;
+  else if (errno != 0)
+    return -errno;
+
+  u = (uid_t) v;
+
+  if ((guint64) u != v)
+    return -ERANGE;
 
   if (uid)
-    *uid = (uid_t) p;
+    *uid = u;
 
   return 0;
 }
