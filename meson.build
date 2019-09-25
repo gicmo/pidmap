@@ -17,3 +17,4 @@ conf.set_quoted('PACKAGE_VERSION', meson.project_version())
 configure_file(output : 'config.h', configuration: conf)
 
 executable('pidmap', ['pidmap.c'], dependencies: [glib, gio, unix, json])
+executable('pidfd', ['pidfd.c'], dependencies: [glib, gio, unix])
